@@ -1,0 +1,305 @@
+#!/bin/bash
+
+# GitHub Account Switcher
+# https://github.com/sisobus/gh-switch
+
+VERSION="1.0.4"
+
+set -e
+
+# Color codes
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Config file location
+CONFIG_DIR="$HOME/.config/gh-switch"
+CONFIG_FILE="$CONFIG_DIR/accounts.conf"
+
+# Check if config exists
+check_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo -e "${RED}No configuration found!${NC}"
+        echo ""
+        echo "Please run: ghs setup"
+        echo ""
+        echo "To add your GitHub accounts with their tokens."
+        exit 1
+    fi
+}
+
+# Helper function to read required input
+read_required() {
+    local prompt="$1"
+    local var_name="$2"
+    local is_password="${3:-false}"
+    local value=""
+
+    while [[ -z "$value" ]]; do
+        if [[ "$is_password" == "true" ]]; then
+            read -s -p "$prompt" value
+            echo ""
+        else
+            read -p "$prompt" value
+        fi
+
+        if [[ -z "$value" ]]; then
+            echo -e "${RED}  This field is required. Please try again.${NC}"
+        fi
+    done
+
+    eval "$var_name='$value'"
+}
+
+# Setup function
+setup() {
+    echo -e "${CYAN}================================${NC}"
+    echo -e "${CYAN}  GitHub Account Switcher Setup  ${NC}"
+    echo -e "${CYAN}================================${NC}"
+    echo ""
+
+    # Check for required commands
+    echo -e "${YELLOW}Checking requirements...${NC}"
+    if ! command -v gh &> /dev/null; then
+        echo -e "${RED}❌ GitHub CLI (gh) is not installed${NC}"
+        echo "Please install it first: brew install gh"
+        exit 1
+    fi
+
+    if ! command -v git &> /dev/null; then
+        echo -e "${RED}❌ Git is not installed${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ All requirements met${NC}"
+    echo ""
+
+    # Create config directory
+    mkdir -p "$CONFIG_DIR"
+
+    # Collect account information
+    echo -e "${BLUE}Setting up your GitHub accounts...${NC}"
+    echo ""
+
+    # Main account
+    echo -e "${YELLOW}Main Account Setup:${NC}"
+    read_required "  Enter GitHub username (e.g., john-doe): " MAIN_USERNAME
+    read_required "  Enter display name (e.g., John Doe): " MAIN_NAME
+    read_required "  Enter email: " MAIN_EMAIL
+    read_required "  Enter GitHub Personal Access Token: " MAIN_TOKEN true
+
+    # Secondary account
+    echo ""
+    echo -e "${YELLOW}Secondary Account Setup:${NC}"
+    read_required "  Enter GitHub username (e.g., jane-smith): " SECOND_USERNAME
+    read_required "  Enter display name (e.g., Jane Smith): " SECOND_NAME
+    read_required "  Enter email: " SECOND_EMAIL
+    read_required "  Enter GitHub Personal Access Token: " SECOND_TOKEN true
+    echo ""
+
+    # Save to config file
+    cat > "$CONFIG_FILE" << EOF
+# GitHub Account Switcher Configuration
+# This file contains sensitive information - keep it secure!
+
+[main]
+username=$MAIN_USERNAME
+name=$MAIN_NAME
+email=$MAIN_EMAIL
+token=$MAIN_TOKEN
+
+[second]
+username=$SECOND_USERNAME
+name=$SECOND_NAME
+email=$SECOND_EMAIL
+token=$SECOND_TOKEN
+EOF
+
+    # Set secure permissions
+    chmod 600 "$CONFIG_FILE"
+
+    echo -e "${GREEN}✓ Configuration saved to $CONFIG_FILE${NC}"
+    echo ""
+    echo -e "${GREEN}================================${NC}"
+    echo -e "${GREEN}  Setup Complete!  ${NC}"
+    echo -e "${GREEN}================================${NC}"
+    echo ""
+    echo -e "${CYAN}Usage:${NC}"
+    echo "  ghs main     - Switch to main account"
+    echo "  ghs second   - Switch to secondary account"
+    echo "  ghs          - Show current status"
+    echo "  ghs clean    - Clean URL rewrites"
+}
+
+# Load account info from config
+get_account_info() {
+    local account=$1
+
+    # Check if config exists
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        return 1
+    fi
+
+    # Read config based on account
+    if [[ "$account" == "main" ]] || [[ "$account" == "m" ]]; then
+        section="main"
+    elif [[ "$account" == "second" ]] || [[ "$account" == "s" ]]; then
+        section="second"
+    else
+        return 1
+    fi
+
+    # Parse the config file
+    local in_section=0
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ "$key" =~ ^#.*$ ]] || [[ -z "$key" ]] && continue
+
+        # Check for section headers
+        if [[ "$key" =~ ^\[(.*)\]$ ]]; then
+            if [[ "${BASH_REMATCH[1]}" == "$section" ]]; then
+                in_section=1
+            else
+                in_section=0
+            fi
+            continue
+        fi
+
+        # If we're in the right section, output the key-value pairs
+        if [[ $in_section -eq 1 ]]; then
+            echo "$key:$value"
+        fi
+    done < "$CONFIG_FILE"
+}
+
+# Get current active account
+get_current_account() {
+    local gh_user=$(gh auth status 2>&1 | grep "Active account: true" -B 1 | head -1 | grep -o "account [^ ]*" | cut -d' ' -f2)
+    local git_user=$(git config --global user.name)
+    local git_email=$(git config --global user.email)
+
+    echo -e "GitHub CLI: ${BLUE}$gh_user${NC}"
+    echo -e "Git config: ${BLUE}$git_user <$git_email>${NC}"
+}
+
+# Switch account function
+switch_account() {
+    local account=$1
+
+    # Get account info
+    local info=$(get_account_info "$account")
+    if [ $? -ne 0 ] || [ -z "$info" ]; then
+        echo -e "${RED}Error: Unknown account '$account'${NC}"
+        echo "Available accounts: main, second"
+        echo "Shortcuts: m (main), s (second)"
+        return 1
+    fi
+
+    # Parse account info
+    local username=$(echo "$info" | grep "^username:" | cut -d':' -f2)
+    local name=$(echo "$info" | grep "^name:" | cut -d':' -f2)
+    local email=$(echo "$info" | grep "^email:" | cut -d':' -f2)
+    local token=$(echo "$info" | grep "^token:" | cut -d':' -f2)
+
+    echo -e "${YELLOW}Switching to $username account...${NC}"
+
+    # 1. Switch GitHub CLI
+    gh auth switch -u "$username" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "$token" | gh auth login --with-token
+    fi
+
+    # 2. Update git config
+    git config --global user.name "$name"
+    git config --global user.email "$email"
+
+    # 3. Update git credentials (for HTTPS)
+    printf "protocol=https\nhost=github.com\n" | git credential reject
+    printf "protocol=https\nhost=github.com\nusername=$username\npassword=$token\n" | git credential approve
+
+    # 4. Set GitHub token for git operations
+    git config --global credential.helper osxkeychain
+    git config --global url."https://$username:$token@github.com/".insteadOf "https://github.com/"
+
+    echo -e "${GREEN}✓ Successfully switched to $username${NC}"
+    echo ""
+    echo "Current configuration:"
+    get_current_account
+}
+
+# Clean git config
+clean_git_config() {
+    echo -e "${YELLOW}Cleaning git URL rewrites...${NC}"
+
+    # Load both accounts and clean their configs
+    if [[ -f "$CONFIG_FILE" ]]; then
+        for account in main second; do
+            local info=$(get_account_info "$account")
+            if [ $? -eq 0 ] && [ -n "$info" ]; then
+                local username=$(echo "$info" | grep "^username:" | cut -d':' -f2)
+                local token=$(echo "$info" | grep "^token:" | cut -d':' -f2)
+                git config --global --unset-all url."https://$username:$token@github.com/".insteadOf 2>/dev/null || true
+            fi
+        done
+    fi
+
+    echo -e "${GREEN}✓ Cleaned${NC}"
+}
+
+# Show help
+show_help() {
+    echo "GitHub Account Switcher (ghs) v$VERSION"
+    echo ""
+    echo "Usage: ghs [command] [account]"
+    echo ""
+    echo "Commands:"
+    echo "  setup        Set up your GitHub accounts"
+    echo "  main, m      Switch to main account"
+    echo "  second, s    Switch to secondary account"
+    echo "  clean        Remove git URL rewrites"
+    echo "  status       Show full gh auth status"
+    echo "  version      Show version information"
+    echo "  help         Show this help message"
+    echo ""
+    echo "Without arguments, shows current configuration"
+}
+
+# Main logic
+case "$1" in
+    "setup")
+        setup
+        ;;
+    "version"|"-v"|"--version")
+        echo "gh-switch version $VERSION"
+        ;;
+    "help"|"-h"|"--help")
+        show_help
+        ;;
+    "")
+        check_config
+        echo "GitHub Account Switcher (v$VERSION)"
+        echo "Usage: ghs [account|status|clean|setup|version|help]"
+        echo ""
+        echo "Current configuration:"
+        get_current_account
+        ;;
+    "status")
+        gh auth status
+        ;;
+    "clean")
+        clean_git_config
+        ;;
+    "main"|"m"|"second"|"s")
+        check_config
+        clean_git_config > /dev/null 2>&1
+        switch_account "$1"
+        ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}"
+        echo "Run 'ghs help' for usage information"
+        exit 1
+        ;;
+esac

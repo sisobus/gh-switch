@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Backup files
+*.backup
+*.bak
+*~
+
+# Shell history
+.bash_history
+.zsh_history
+
+# Personal configurations
+gh-switch
+config.local
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
