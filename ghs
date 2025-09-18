@@ -3,7 +3,7 @@
 # GitHub Account Switcher
 # https://github.com/sisobus/gh-switch
 
-VERSION="1.0.4"
+VERSION="1.0.5"
 
 set -e
 
